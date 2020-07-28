@@ -12,7 +12,6 @@ import time
 import datetime
 import os
 import sys
-import socket
 import threading
 import operator
 
@@ -36,6 +35,18 @@ from WheelModuleLib import *
 from featuresLib import *
 
 # DEFINITIONS
+
+# Model
+MODEL = '2019' # '2019' or "2020'
+
+# Classification frequency
+CLASS_FREQ = 0.2 # 0.2, 0.5, or 0.8
+
+# Active person
+PERSON_DATA = 'Jamie' # 'Keenan', 'Kevin', 'Mahsa', or 'Jamie'
+
+# Active terrain
+TEST_TERRAIN = 'Gravel' #'Linoleum', 'Grass', 'Gravel'
 
 # Sensor list to activate
 SENSOR_LIST = ['IMU_9', 'IMU_6', 'USS_DOWN', 'USS_FORW', 'PI_CAM', 'LEFT', 'RIGHT']
@@ -95,7 +106,7 @@ class ClTerrainClassifier:
 		#~ # Right
 		#~ self.placement = 'Right'
 		#~ self.sensorParam = WHEEL_MODULE
-		
+
 		# Calculates the number of bins available
 		nbins = int(self.sensorParam['wLength'] / self.sensorParam['fSamp'] *self.sensorParam['fLow'] + N_BINS_OVER_CUTOFF)
 			
@@ -106,14 +117,26 @@ class ClTerrainClassifier:
 		#~ self.SVMFreq = load('models/SupportVectorMachine_Middle_FreqFeats.joblib')
 		#~ self.SVMPSD = load('models/SupportVectorMachine_Middle_PSDLogs.joblib')
 
-		self.RFTime = load('models/RandomForest_Middle_TimeFeats.joblib')
-		self.RFFreq = load('models/RandomForest_Middle_FreqFeats.joblib')
-		self.RFPSD = load('models/RandomForest_Middle_PSDLogs.joblib')
+		if MODEL == '2019':
+			# Keenan's 2019 models
+			self.RFTime = load('models/RandomForest_Middle_TimeFeats.joblib')
+			self.RFFreq = load('models/RandomForest_Middle_FreqFeats.joblib')
+			self.RFPSD = load('models/RandomForest_Middle_PSDLogs.joblib')
 
-		self.fftScaler = load('scalers/Middle_FFTs_Scaler.joblib')
-		self.timeScaler = load('scalers/Middle_TimeFeats_Scaler.joblib')
-		self.freqScaler = load('scalers/Middle_FreqFeats_Scaler.joblib')
-		self.psdlScaler = load('scalers/Middle_PSDLogs_Scaler.joblib')
+			self.fftScaler = load('scalers/Middle_FFTs_Scaler.joblib')
+			self.timeScaler = load('scalers/Middle_TimeFeats_Scaler.joblib')
+			self.freqScaler = load('scalers/Middle_FreqFeats_Scaler.joblib')
+			self.psdlScaler = load('scalers/Middle_PSDLogs_Scaler.joblib')
+
+			self.RFResults = pd.DataFrame(columns = ["RF Time", "RF Frequency", "RF PSD"])
+
+		elif MODEL == '2020':
+			# EMBC Power models
+			self.RFAll = load('models/RF_SFS_ALL_25.joblib')
+			self.fftScaler = load('scalers/Middle_FFTs_Scaler_Power.joblib')
+			self.timeScaler = load('scalers/Middle_TimeFeats_Scaler_Power.joblib')
+			self.freqScaler = load('scalers/Middle_FreqFeats_Scaler_Power.joblib')
+			self.psdlScaler = load('scalers/Middle_PSDWelch_Scaler_Power.joblib')
 
 		# Prepopulate pandas dataframe
 		EFTimeColumnNames = ['{} {} {}'.format(featName, direction, self.placement) for direction in DATA_COLUMNS for featName in TIME_FEATURES_NAMES]
@@ -137,15 +160,8 @@ class ClTerrainClassifier:
 		self.instDAQLoop = {} 
 		
 		for sensor in ACTIVE_SENSORS:
-			if sensor == 0:
+			if sensor == 1:
 				self.instDAQLoop[SENSOR_LIST[sensor]] = ClIMUDataStream(self.dataQueue, self.runMarker)
-			elif sensor == 1:
-				self.instDAQLoop[SENSOR_LIST[sensor]] = ClIMUDataStream(self.dataQueue, self.runMarker)
-			elif sensor == 5:
-				self.instDAQLoop[SENSOR_LIST[sensor]] = ClWheelDataParsing(Left, self.dataQueue, self.runMarker)
-			elif sensor == 6:
-				self.instDAQLoop[SENSOR_LIST[sensor]] = ClWheelDataParsing(Right, self.dataQueue, self.runMarker)
-				
 
 	def fnStart(self, frequency):
 		"""
@@ -156,7 +172,7 @@ class ClTerrainClassifier:
 		print('Start Process.')
 		
 		# Start terrain classification in separate thread
-		terrain = Thread(target=self.fnTerrainClassification, args = (0.5, ))
+		terrain = Thread(target=self.fnTerrainClassification, args = (CLASS_FREQ, ))
 		terrain.start()
 		
 		timeStart = time.time()
@@ -170,7 +186,7 @@ class ClTerrainClassifier:
 			processes[SENSOR_LIST[sensor]].start()
 
 		#Keep collecting data and updating rolling window
-		while True:
+		while self.runMarker.empty():
 
 			transmissionData = self.dataQueue.get()
 
@@ -182,6 +198,11 @@ class ClTerrainClassifier:
 			elif transmissionData[0] in ['PI_CAM']:
 				pass
 
+		# wait for all processes and threads to complete
+		terrain.join()
+		for sensor in ACTIVE_SENSORS:
+			processes[SENSOR_LIST[sensor]].join()
+
 	def fnTerrainClassification(self, waitTime):
 		"""
 		Purpose:	Class method for running terrain classification
@@ -191,7 +212,7 @@ class ClTerrainClassifier:
 		index = 0
 		
 		# Keep running until run marker tells to terminate
-		while self.runMarker:
+		while self.runMarker.empty():
 			
 			# print(time.perf_counter())
 			
@@ -208,30 +229,29 @@ class ClTerrainClassifier:
 			#~ terrainTypeSVMTime = self.SVMTime.predict(self.EFTimeColumnedFeatures)
 			#~ terrainTypeSVMFreq = self.SVMFreq.predict(self.EFFreqColumnedFeatures)
 			#~ terrainTypeSVMPSD = self.SVMPSD.predict(self.windowIMULogPSDFeatures)
-			
-			#~ self.socket.sendall('Time: {0:>8s} \nFreq: {1:>8s} \nPSD:  {2:>8s}'.format(TERRAINS[terrainTypeSVMTime[0]], TERRAINS[terrainTypeSVMFreq[0]], TERRAINS[terrainTypeSVMPSD[0]]).encode())
-			
-			terrainTypeRFTime = self.RFTime.predict(self.EFTimeColumnedFeatures)
-			terrainTypeRFFreq = self.RFFreq.predict(self.EFFreqColumnedFeatures)
-			terrainTypeRFPSD = self.RFPSD.predict(self.windowIMULogPSDFeatures)
+
+			if MODEL == '2019':
+				# Keenan's 2019 models
+				terrainTypeRFTime = self.RFTime.predict(self.EFTimeColumnedFeatures)
+				terrainTypeRFFreq = self.RFFreq.predict(self.EFFreqColumnedFeatures)
+				terrainTypeRFPSD = self.RFPSD.predict(self.windowIMULogPSDFeatures)
+
+			elif MODEL == '2020':
+				# terrainTypeRFAll = self.RFAll.predict(self.)
+				pass
+
 			try:
 				print('Time: {0:>8s}     Freq: {1:>8s}     PSD:  {2:>8s}'.format(TERRAINS[terrainTypeRFTime[0]], TERRAINS[terrainTypeRFFreq[0]], TERRAINS[terrainTypeRFPSD[0]]))
-				# self.socket.sendall('Time: {0:>8s}     Freq: {1:>8s}     PSD:  {2:>8s}'.format(TERRAINS[terrainTypeRFTime[0]], TERRAINS[terrainTypeRFFreq[0]], TERRAINS[terrainTypeRFPSD[0]]).encode())
+				self.RFResults = self.RFResults.append({"RF Time": TERRAINS[terrainTypeRFTime[0]], "RF Frequency": TERRAINS[terrainTypeRFFreq[0]], "RF PSD": TERRAINS[terrainTypeRFPSD[0]]}, ignore_index=True)
 			except Exception as e:
 				print(e)
 				break
 			
-			#~ self.socket.sendall('Time (RF):  {0:>8s} \nTime (SVM): {1:>8s}'.format(TERRAINS[terrainTypeRFTime[0]], TERRAINS[terrainTypeSVMTime[0]]).encode())
-			
-			#~ print('Time: {0:>8s} \nFreq: {1:>8s} \nPSD:  {2:>8s} \n'.format(TERRAINS[terrainTypeSVMTime[0]], TERRAINS[terrainTypeSVMFreq[0]], TERRAINS[terrainTypeSVMPSD[0]]))
-			#~ print('Time: {0:>8s} \nFreq: {1:>8s} \nPSD:  {2:>8s} \n'.format(TERRAINS[terrainTypeRFTime[0]], TERRAINS[terrainTypeRFFreq[0]], TERRAINS[terrainTypeRFPSD[0]]))
-			
-			#~ print('Time: {}'.format(TERRAINS[terrainTypeSVMTime[0]]))
-			#~ print('Freq: {}'.format(TERRAINS[terrainTypeSVMFreq[0]]))
-			#~ print('PSD:  {}'.format(TERRAINS[terrainTypeSVMPSD[0]]))
-			
 			time.sleep(waitTime - (time.perf_counter() % waitTime))
-		
+
+		self.RFResults.to_csv(os.path.join('2019-Results', "{}ms-{}-{}.csv".format(CLASS_FREQ, TEST_TERRAIN, PERSON_DATA)))
+		print('Saved.')
+
 	def fnShutDown(self):
 		
 		print('Closing Socket')
@@ -260,8 +280,6 @@ class ClTerrainClassifier:
 		# Filter all the data columns
 		for i in range(6):
 			self.windowIMUfiltered[:, i] = signal.filtfilt(b_butter, a_butter, dataSet[:, i])[PAD_LENGTH:self.sensorParam['wLength']+PAD_LENGTH]
-		
-		#print('filtered!')
 			
 	def fnBuildPSD(self, dataWindow):
 		"""
@@ -330,8 +348,9 @@ class ClIMUDataStream(threading.Timer):
 	"""
 
 	def __init__(self,  dataQueue, runMarker):
-		self.streamFile = pd.read_csv(os.path.join(dir_path, "set_power", "Middle_CarpetPowerF8Mahsa_Module6050.csv"))
+		self.streamFile = pd.read_csv(os.path.join(dir_path, "set_power", "Middle_{}PowerF8{}_Module6050.csv".format(TEST_TERRAIN, PERSON_DATA)))
 		self.streamRow = 0
+		self.streamRowEnd = len(self.streamFile.index)
 		self.dataQueue = dataQueue
 		self.runMarker = runMarker
 		self.offset = np.zeros(6)
@@ -343,19 +362,18 @@ class ClIMUDataStream(threading.Timer):
         """
 
 		timeRecorded = time.time()
-		data = self.streamFile.iloc[self.streamRow,:]
-		self.streamRow += 1
-		#print("{} {}".format(data[9], data[0]))
-		self.dataQueue.put(['IMU_6', data[9], data[0], data[1], data[2], data[3], data[4], data[5]])
+		if self.streamRow < self.streamRowEnd:
+			data = self.streamFile.iloc[self.streamRow,:]
+			self.dataQueue.put(['IMU_6', data[9], data[0], data[1], data[2], data[3], data[4], data[5]])
+			self.streamRow += 1
+		else:
+			self.runMarker.put(False)
 
 	def fnRun(self, frequency):
 		"""
         Purpose:	Script that runs until termination message is sent to queue.
         Passed:		Frequency of data capture
         """
-
-		# Reads saved offset values
-		# self.offset = pkl.load(open('IMU6050Offset.pkl', 'rb'))
 
 		# Sets time interval between signal capture
 		waitTime = 1 / frequency
@@ -392,22 +410,18 @@ class ClIMUDataStream(threading.Timer):
 if __name__=="__main__":
 	
 	connectedStatus = False
-
-	dummyQueue = Queue
-	dummyMarker = Queue
-
-	# instMpu9250DAQ = ClMpu9250DAQ(dummyQueue, dummyMarker)
-	# instMpu9250DAQ.fnCalibrate()
-	# instMpu6050DAQ = ClMpu6050DAQ(dummyQueue, dummyMarker)
-	# instMpu6050DAQ.fnCalibrate()
-
 	processStatus = False
+	runCompletion = False
 
-	while True:
+	while runCompletion == False:
 		try:
 			instTerrainClassifier = ClTerrainClassifier(protocol = 'TCP')
 			processStatus = True
 			instTerrainClassifier.fnStart(300)
+			instTerrainClassifier.runMarker.close()
+			instTerrainClassifier.dataQueue.close()
+			print("Application Completed.")
+			runCompletion = True
 		except Exception as e:
 			time.sleep(1)
 			if processStatus:
