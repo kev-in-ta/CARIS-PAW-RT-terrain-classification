@@ -5,7 +5,7 @@
       <excludeFolder url="file://$MODULE_DIR$/venv" />
       <excludeFolder url="file://$MODULE_DIR$/venv_prebuilt" />
     </content>
-    <orderEntry type="jdk" jdkName="Python 3.8 (CARIS_PAW_RT_Terrain) (2)" jdkType="Python SDK" />
+    <orderEntry type="jdk" jdkName="2020" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
   </component>
   <component name="PyDocumentationSettings">

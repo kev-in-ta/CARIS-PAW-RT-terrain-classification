@@ -13,6 +13,7 @@ import datetime
 import os
 import sys
 import threading
+import mlxtend
 import operator
 
 import pickle as pkl
@@ -21,7 +22,6 @@ from scipy import signal, stats
 import pandas as pd
 import sklearn
 from sklearn.preprocessing import scale
-import pickle as pkl
 from joblib import load, dump
 
 from multiprocessing import Process, Queue
@@ -37,13 +37,13 @@ from featuresLib import *
 # DEFINITIONS
 
 # Model
-MODEL = '2019' # '2019' or "2020'
+MODEL = '2020' # '2019' or "2020'
 
 # Classification frequency
-CLASS_FREQ = 0.2 # 0.2, 0.5, or 0.8
+CLASS_FREQ = 0.5 # 0.2, 0.5, or 0.8
 
 # Active person
-PERSON_DATA = 'Jamie' # 'Keenan', 'Kevin', 'Mahsa', or 'Jamie'
+PERSON_DATA = 'Kevin' # 'Keenan', 'Kevin', 'Mahsa', or 'Jamie'
 
 # Active terrain
 TEST_TERRAIN = 'Gravel' #'Linoleum', 'Grass', 'Gravel'
@@ -60,17 +60,22 @@ DATA_COLUMNS =  ['X Accel', 'Y Accel', 'Z Accel', 'X Gyro', 'Y Gyro', 'Z Gyro']
 
 EPSILON = 0.00001 # For small float values
 
-FRAME_MODULE = {'wLength': 300, 'fSamp': 300, 'fLow': 55, 'fHigh': 1}
-WHEEL_MODULE = {'wLength': 333, 'fSamp': 333.3, 'fLow': 60, 'fHigh': 1}
+if MODEL == "2019":
+	FRAME_MODULE = {'wLength': 300, 'fSamp': 300, 'fLow': 55, 'fHigh': 1}
+	WHEEL_MODULE = {'wLength': 333, 'fSamp': 333.3, 'fLow': 60, 'fHigh': 1}
+elif MODEL == "2020":
+	FRAME_MODULE = {'wLength': 512, 'fSamp': 300, 'fLow': 50, 'fHigh': 1}
+	WHEEL_MODULE = {'wLength': 333, 'fSamp': 333.3, 'fLow': 60, 'fHigh': 1}
 
 PAD_LENGTH = 15 # pad length to let filtering be better
 N_BINS_OVER_CUTOFF = 5 # Collect some information from attenuated frequencies bins
+BIN_TRIM = 120
 
 # DICTIONARIES
 
 # Time domain feature functions and names
-TIME_FEATURES = {'Mean': np.mean, 'Std': np.std,  'Norm': l2norm, 'AC': autocorr, 
-                 'Max': np.amax, 'Min' : np.amin, 'RMS': rms, 'ZCR': zcr, 
+TIME_FEATURES = {'Mean': np.mean, 'Std': np.std,  'Norm': l2norm, 'AC': autocorr,
+                 'Max': np.amax, 'Min' : np.amin, 'RMS': rms, 'ZCR': zcr,
                  'Skew': stats.skew, 'EK': stats.kurtosis}
 
 TIME_FEATURES_NAMES = ['Mean', 'Std', 'Norm', 'AC', 'Max', 'Min', 'RMS', 'ZCR', 'Skew', 'EK']
@@ -80,6 +85,21 @@ FREQ_FEATURES = freq_features = {'MSF': msf, 'RMSF': rmsf, 'FC': fc, 'VF': vf, '
 
 FREQ_FEATURES_NAMES = ['MSF', 'RMSF', 'FC', 'VF', 'RVF']
 
+TIME_FREQ_FEATURES = {'Mean': np.mean, 'Std': np.std,  'Norm': l2norm, 'AC': autocorr,
+                 'Max': np.amax, 'Min' : np.amin, 'RMS': rms, 'ZCR': zcr,
+                 'Skew': stats.skew, 'EK': stats.kurtosis, 'MSF': msf, 'RMSF': rmsf, 'FC': fc, 'VF': vf, 'RVF': rvf}
+
+TIME_FREQ_FEATURES_NAMES = ['Mean', 'Std', 'Norm', 'AC', 'Max', 'Min', 'RMS', 'ZCR', 'Skew', 'EK', 'MSF', 'RMSF', 'FC', 'VF', 'RVF']
+
+RF_ALL_FEATURES = ['Norm X Accel Middle', 'RMS X Accel Middle', 'Mean Y Accel Middle', 'Norm Y Accel Middle', 'Max Y Accel Middle',
+				   'Min Y Accel Middle', 'RMS Y Accel Middle', 'ZCR Y Accel Middle','Skew Y Accel Middle', 'Mean Z Accel Middle',
+				   'Norm Z Accel Middle', 'Max Z Accel Middle', 'Min Z Accel Middle', 'ZCR Z Accel Middle', 'RMS X Gyro Middle',
+				   'ZCR X Gyro Middle', 'Skew X Gyro Middle', 'EK X Gyro Middle', 'Mean Y Gyro Middle', 'Norm Y Gyro Middle',
+				   'Min Y Gyro Middle', 'ZCR Y Gyro Middle', 'EK Y Gyro Middle', 'Mean Z Gyro Middle', 'Max Z Gyro Middle',
+				   'Min Z Gyro Middle', 'MSF Y Accel Middle', 'VF Y Accel Middle', 'RVF Y Accel Middle', 'RMSF Z Accel Middle',
+				   'MSF X Gyro Middle', 'VF X Gyro Middle', 'VF Y Gyro Middle', 'RVF Y Gyro Middle', 'RMSF Z Gyro Middle',
+				   'VF Z Gyro Middle']
+
 TERRAINS = ['Concrete', 'Carpet', 'Linoleum', 'Asphalt', 'Sidewalk', 'Grass', 'Gravel']
 
 # CLASSES
@@ -88,13 +108,13 @@ class ClTerrainClassifier:
 	"""
 	Class for establishing wireless communications.
 	"""
-	
+
 	def __init__(self, protocol = 'TCP'):
 		"""
 		Purpose:	Initialize various sensors and class variables
 		Passed: 	Nothing
 		"""
-		
+
 		# Middle
 		self.placement = 'Middle'
 		self.sensorParam = FRAME_MODULE
@@ -102,16 +122,16 @@ class ClTerrainClassifier:
 		# Left
 		#~ self.placement = 'Left'
 		#~ self.sensorParam = WHEEL_MODULE
-		
+
 		#~ # Right
 		#~ self.placement = 'Right'
 		#~ self.sensorParam = WHEEL_MODULE
 
 		# Calculates the number of bins available
 		nbins = int(self.sensorParam['wLength'] / self.sensorParam['fSamp'] *self.sensorParam['fLow'] + N_BINS_OVER_CUTOFF)
-			
+
 		print('unpickling')
-		
+
 		#~ randomForestTime = pkl.load(open(os.path.join(dir_path, 'models', 'RandomForest_Middle_TimeFeats.pkl'), 'rb'))
 		#~ self.SVMTime = load('models/SupportVectorMachine_Middle_TimeFeats.joblib')
 		#~ self.SVMFreq = load('models/SupportVectorMachine_Middle_FreqFeats.joblib')
@@ -132,11 +152,9 @@ class ClTerrainClassifier:
 
 		elif MODEL == '2020':
 			# EMBC Power models
-			self.RFAll = load('models/RF_SFS_ALL_25.joblib')
-			self.fftScaler = load('scalers/Middle_FFTs_Scaler_Power.joblib')
-			self.timeScaler = load('scalers/Middle_TimeFeats_Scaler_Power.joblib')
-			self.freqScaler = load('scalers/Middle_FreqFeats_Scaler_Power.joblib')
-			self.psdlScaler = load('scalers/Middle_PSDWelch_Scaler_Power.joblib')
+			self.RFAll = load('models/RF-36.joblib')
+			self.RFSFSAll = load('models/RF_SFS-36.joblib')
+			self.RFAllScaler = load('scalers/scalers-36.joblib')
 
 		# Prepopulate pandas dataframe
 		EFTimeColumnNames = ['{} {} {}'.format(featName, direction, self.placement) for direction in DATA_COLUMNS for featName in TIME_FEATURES_NAMES]
@@ -144,21 +162,25 @@ class ClTerrainClassifier:
 		EFFreqColumnNames = ['{} {} {}'.format(featName, direction, self.placement) for direction in DATA_COLUMNS for featName in FREQ_FEATURES_NAMES]
 		self.EFFreqColumnedFeatures = pd.DataFrame(data = np.zeros((1,len(EFFreqColumnNames))), columns = EFFreqColumnNames)
 		self.protocol = protocol
-		
+
+		self.EFTimeFreqColumnedFeatures = pd.DataFrame(data = np.zeros((1,len(EFFreqColumnNames)+len(EFTimeColumnNames))), columns = EFFreqColumnNames + EFTimeColumnNames)
+
 		# Initialize data queue and marker to pass for separate prcoesses
 		self.dataQueue = Queue()
 		self.runMarker = Queue()
-		
+
 		# Create class variables
 		self.windowIMUraw = np.zeros((self.sensorParam['wLength'] + 2 * PAD_LENGTH, 6))
 		self.windowIMUfiltered = np.zeros((self.sensorParam['wLength'], 6))
-		self.windowIMUPSD = np.zeros([])
+		self.windowIMUFFT = np.zeros([])
+		self.windowIMUPSDWelch = np.zeros([])
+		self.windowIMUPSDPeriodogram = np.zeros([])
 		self.windowIMULogPSD = np.zeros([])
 		self.windowIMULogPSDFeatures = np.zeros([])
-				
+
 		# Create dictionary to house various active sensors and acivate specified sensors
-		self.instDAQLoop = {} 
-		
+		self.instDAQLoop = {}
+
 		for sensor in ACTIVE_SENSORS:
 			if sensor == 1:
 				self.instDAQLoop[SENSOR_LIST[sensor]] = ClIMUDataStream(self.dataQueue, self.runMarker)
@@ -170,13 +192,13 @@ class ClTerrainClassifier:
 		"""
 
 		print('Start Process.')
-		
+
 		# Start terrain classification in separate thread
 		terrain = Thread(target=self.fnTerrainClassification, args = (CLASS_FREQ, ))
 		terrain.start()
-		
+
 		timeStart = time.time()
-		
+
 		# Create dictionary to store processes
 		processes = {}
 
@@ -192,7 +214,7 @@ class ClTerrainClassifier:
 
 			if transmissionData[0] in ['IMU_6', 'WHEEL']:
 				self.windowIMUraw = np.roll(self.windowIMUraw, -1, axis=0)
-				self.windowIMUraw[-1, :] = np.multiply(np.subtract(transmissionData[2:8], [0, 0, 9.8, 0, 0, 0]), [1, 1, 1, math.pi/180, math.pi/180, math.pi/180]) 
+				self.windowIMUraw[-1, :] = np.multiply(np.subtract(transmissionData[2:8], [0, 0, 9.8, 0, 0, 0]), [1, 1, 1, math.pi/180, math.pi/180, math.pi/180])
 			elif transmissionData[0] in ['USS_DOWN', 'USS_FORW']:
 				pass
 			elif transmissionData[0] in ['PI_CAM']:
@@ -208,24 +230,33 @@ class ClTerrainClassifier:
 		Purpose:	Class method for running terrain classification
 		Passed:		Time in between runs
 		"""
-		
+
 		index = 0
-		
+
 		# Keep running until run marker tells to terminate
 		while self.runMarker.empty():
-			
+
 			# print(time.perf_counter())
-			
+
 			# Filter window
 			self.fnFilterButter(self.windowIMUraw)
-			
-			# Build extracted feature vector
-			self.fnBuildTimeFeatures(TIME_FEATURES_NAMES)
-			
+
 			# Build PSD and PSD features
 			self.fnBuildPSD(self.windowIMUfiltered)
-			self.fnBuildFreqFeatures(FREQ_FEATURES_NAMES)
-			
+
+			if MODEL == '2019':
+				# Build extracted feature vector
+				self.fnBuildTimeFeatures(TIME_FEATURES_NAMES)
+
+				# Build FFT feature
+				self.fnBuildFFT(self.windowIMUfiltered)
+
+				# Build frequency features
+				self.fnBuildFreqFeatures(FREQ_FEATURES_NAMES)
+
+			elif MODEL == '2020':
+				self.fnBuildTimeFreqFeatures(TIME_FEATURES_NAMES, FREQ_FEATURES_NAMES)
+
 			#~ terrainTypeSVMTime = self.SVMTime.predict(self.EFTimeColumnedFeatures)
 			#~ terrainTypeSVMFreq = self.SVMFreq.predict(self.EFFreqColumnedFeatures)
 			#~ terrainTypeSVMPSD = self.SVMPSD.predict(self.windowIMULogPSDFeatures)
@@ -237,23 +268,27 @@ class ClTerrainClassifier:
 				terrainTypeRFPSD = self.RFPSD.predict(self.windowIMULogPSDFeatures)
 
 			elif MODEL == '2020':
-				# terrainTypeRFAll = self.RFAll.predict(self.)
-				pass
+				terrainTypeRFAll = self.RFAll.predict(self.RFSFSAll.transform(self.EFTimeFreqColumnedFeatures))
+				terrainTypeRFAll2 = self.RFAll.predict(self.EFTimeFreqColumnedFeatures[RF_ALL_FEATURES])
 
 			try:
-				print('Time: {0:>8s}     Freq: {1:>8s}     PSD:  {2:>8s}'.format(TERRAINS[terrainTypeRFTime[0]], TERRAINS[terrainTypeRFFreq[0]], TERRAINS[terrainTypeRFPSD[0]]))
-				self.RFResults = self.RFResults.append({"RF Time": TERRAINS[terrainTypeRFTime[0]], "RF Frequency": TERRAINS[terrainTypeRFFreq[0]], "RF PSD": TERRAINS[terrainTypeRFPSD[0]]}, ignore_index=True)
+				if MODEL =='2019':
+					print('Time: {0:>8s}     Freq: {1:>8s}     PSD:  {2:>8s}'.format(TERRAINS[terrainTypeRFTime[0]], TERRAINS[terrainTypeRFFreq[0]], TERRAINS[terrainTypeRFPSD[0]]))
+					self.RFResults = self.RFResults.append({"RF Time": TERRAINS[terrainTypeRFTime[0]], "RF Frequency": TERRAINS[terrainTypeRFFreq[0]], "RF PSD": TERRAINS[terrainTypeRFPSD[0]]}, ignore_index=True)
+				elif MODEL == '2020':
+					print('Prediction: {0:>8s} Prediction: {0:>8s}'.format(TERRAINS[terrainTypeRFAll[0]], TERRAINS[terrainTypeRFAll2[0]]))
 			except Exception as e:
 				print(e)
 				break
-			
+
 			time.sleep(waitTime - (time.perf_counter() % waitTime))
 
-		self.RFResults.to_csv(os.path.join('2019-Results', "{}ms-{}-{}.csv".format(CLASS_FREQ, TEST_TERRAIN, PERSON_DATA)))
+		if MODEL == '2019':
+			self.RFResults.to_csv(os.path.join('2019-Results', "{}ms-{}-{}.csv".format(CLASS_FREQ, TEST_TERRAIN, PERSON_DATA)))
 		print('Saved.')
 
 	def fnShutDown(self):
-		
+
 		print('Closing Socket')
 		self.socket.close()
 		try:
@@ -267,56 +302,91 @@ class ClTerrainClassifier:
 					stores in filtered class variable
 		Passed:		Rolling raw IMU data
 		"""
-		
+
 		# Get normalized frequencies
-		w_low = self.sensorParam['fLow'] / (self.sensorParam['fSamp'] / 2) 
+		w_low = self.sensorParam['fLow'] / (self.sensorParam['fSamp'] / 2)
 		w_high = self.sensorParam['fHigh'] / (self.sensorParam['fSamp'] / 2)
 
 		# Get Butterworth filter parameters
 		b_butter, a_butter = signal.butter(N=4, Wn=w_low, btype='low')
-		
+
 		dataSet = np.copy(dataWindow)
-		
+
 		# Filter all the data columns
 		for i in range(6):
 			self.windowIMUfiltered[:, i] = signal.filtfilt(b_butter, a_butter, dataSet[:, i])[PAD_LENGTH:self.sensorParam['wLength']+PAD_LENGTH]
-			
+
+	def fnBuildFFT(self, dataWindow):
+		"""
+		Purpose:	Builds power spectrum densities for each direction
+		Passed:		Filtered IMU data
+		"""
+
+		n_bins = int(self.sensorParam['wLength'] / 2)  # should be the number of data points divided by 2
+		window_fft = np.zeros((n_bins, 6))
+
+		for i in range(6):
+			window_fft[:, i] = np.resize(2 / self.sensorParam['wLength'] * np.abs(np.fft.fft(dataWindow[:, i])),
+										 n_bins)  # keeping poistive freq values * 2 / window_size
+			# Get positive frequency bins for given FFT parameters
+			window_FREQ = np.resize(np.fft.fftfreq(self.sensorParam['wLength'], 1 / self.sensorParam['fSamp']), n_bins)
+
+		freq_col = np.reshape(window_FREQ, (-1, 1))
+
+		# Append the frequency column
+		self.windowIMUFFT = np.append(window_fft, freq_col, axis=1)
+
 	def fnBuildPSD(self, dataWindow):
 		"""
 		Purpose:	Builds power spectrum densities for each direction
 		Passed:		Filtered IMU data
 		"""
-		
+
 		# Only include frequency bins up to and a little bit past the cutoff frequency
 		# Everything past that is useless because its the same on all terrains
-		n_bins = int(self.sensorParam['wLength'] / self.sensorParam['fSamp'] * self.sensorParam['fLow']) + N_BINS_OVER_CUTOFF
-		windowIMUPSD = np.zeros((n_bins, 6))
+		if MODEL =='2019':
+			n_bins = int(self.sensorParam['wLength'] / self.sensorParam['fSamp'] * self.sensorParam['fLow']) + N_BINS_OVER_CUTOFF
+		elif MODEL =='2020':
+			n_bins = int(self.sensorParam['wLength']/2)
+		windowIMUPSDWelch = np.zeros((n_bins, 6))
+		windowIMUPSDPeriodogram = np.zeros((n_bins, 6))
 		windowIMULogPSD = np.zeros((n_bins, 6))
 
 		# Calculate PSD for each axes
 		for i in range(6):
 			# Normalized PSD - Returns frequencies and power density
+			freq, Pxx = signal.welch(dataWindow[:, i], self.sensorParam['fSamp'], nperseg = self.sensorParam['wLength'])
+			windowIMUPSDWelch[:, i] = np.resize(Pxx[1:], n_bins)
+
 			freq, Pxx = signal.periodogram(dataWindow[:, i], self.sensorParam['fSamp'])
-			windowIMUPSD[:, i] = np.resize(Pxx[1:], n_bins)
-			
+			windowIMUPSDPeriodogram[:, i] = np.resize(Pxx[1:], n_bins)
+
 			# Calculate log10 of PSD, replacing points where PSD = 0 with 0 to avoid division by 0
-			for j in range(len(windowIMUPSD[:, i])):
-				if (windowIMUPSD[j, i] == 0):
+			for j in range(len(windowIMUPSDPeriodogram[:, i])):
+				if (windowIMUPSDPeriodogram[j, i] == 0):
 					windowIMULogPSD[j, i] = 0
 				else:
-					windowIMULogPSD[j, i] = np.log10(windowIMUPSD[j, i])
-			
+					windowIMULogPSD[j, i] = np.log10(windowIMUPSDPeriodogram[j, i])
+
 		# Append freq column
-		freq_col = np.transpose([np.resize(freq[:-1], n_bins)])
-		self.windowIMUPSD = np.append(windowIMUPSD, freq_col, axis=1)
-		self.windowIMULogPSD = np.append(windowIMULogPSD, freq_col, axis=1)
-		
-		colNames = ['{} {} Hz {} {}'.format('PSDLog', round(freq[0]), direction, self.placement) for direction in DATA_COLUMNS for freq in freq_col]	
-		psdLogData = [self.windowIMULogPSD[i, j] for j in range(len(self.windowIMULogPSD[0, :])-1) for i in range(len(self.windowIMULogPSD[:, 0]))]
-		#~ psdLogData = np.divide(np.subtract(psdLogData, self.PSDMean), self.PSDScale)
-		psdLogData = self.psdlScaler.transform(np.array(psdLogData).reshape(1,-1))[0]
-		self.windowIMULogPSDFeatures = pd.DataFrame(data=[psdLogData], columns=colNames)
-   	
+		if MODEL == '2019':
+			freq_col = np.transpose([np.resize(freq[:-1], n_bins)])
+			self.windowIMUPSDWelch = np.append(windowIMUPSDWelch, freq_col, axis=1)
+			self.windowIMUPSDPeriodogram = np.append(windowIMUPSDPeriodogram, freq_col, axis=1)
+			self.windowIMULogPSD = np.append(windowIMULogPSD, freq_col, axis=1)
+		elif MODEL == '2020':
+			freq_col = np.transpose([np.resize(freq, BIN_TRIM)])
+			self.windowIMUPSDWelch = np.append(windowIMUPSDWelch[:BIN_TRIM], freq_col, axis=1)
+			self.windowIMUPSDPeriodogram = np.append(windowIMUPSDPeriodogram[:BIN_TRIM], freq_col, axis=1)
+			self.windowIMULogPSD = np.append(windowIMULogPSD[:BIN_TRIM], freq_col, axis=1)
+
+		if MODEL =='2019':
+			colNames = ['{} {} Hz {} {}'.format('PSDLog', round(freq[0]), direction, self.placement) for direction in DATA_COLUMNS for freq in freq_col]
+			psdLogData = [self.windowIMULogPSD[i, j] for j in range(len(self.windowIMULogPSD[0, :])-1) for i in range(len(self.windowIMULogPSD[:, 0]))]
+			#~ psdLogData = np.divide(np.subtract(psdLogData, self.PSDMean), self.PSDScale)
+			psdLogData = self.psdlScaler.transform(np.array(psdLogData).reshape(1,-1))[0]
+			self.windowIMULogPSDFeatures = pd.DataFrame(data=[psdLogData], columns=colNames)
+
 	def fnBuildTimeFeatures(self, features):
 		"""
 		Purpose:	Perform all time domain feature extraction on filtered data, 
@@ -324,7 +394,6 @@ class ClTerrainClassifier:
 		Passed:		Feature dictionary to perform
 		"""
 		dataList = [TIME_FEATURES[featName](self.windowIMUfiltered[:, i]) for i, direction in enumerate(DATA_COLUMNS) for featName in features]
-		#~ dataList = np.divide(np.subtract(dataList, self.TimeMean), self.TimeScale)
 		dataList = self.timeScaler.transform(np.array(dataList).reshape(1,-1))[0]
 		dataNames = ['{} {} {}'.format(featName, direction, self.placement) for direction in DATA_COLUMNS for featName in features]
 		self.EFTimeColumnedFeatures = pd.DataFrame(data=[dataList], columns=dataNames)
@@ -335,12 +404,26 @@ class ClTerrainClassifier:
 					then columns the data and standardized based on mean and std
 		Passed:		Feature dictionary to perform
 		"""
-		dataList = [FREQ_FEATURES[featName](self.windowIMUPSD[:, -1], self.windowIMUPSD[:, i]) for i, direction in enumerate(DATA_COLUMNS) for featName in features]
-		#~ dataList = np.divide(np.subtract(dataList, self.FreqMean), self.FreqScale)
+		dataList = [FREQ_FEATURES[featName](self.windowIMUPSDPeriodogram[:, -1], self.windowIMUPSDPeriodogram[:, i]) for i, direction in enumerate(DATA_COLUMNS) for featName in features]
 		dataList = self.freqScaler.transform(np.array(dataList).reshape(1, -1))[0]
 		dataNames = ['{} {} {}'.format(featName, direction, self.placement) for direction in DATA_COLUMNS for featName in features]
 		self.EFFreqColumnedFeatures = pd.DataFrame(data=[dataList], columns=dataNames)
 
+	def fnBuildTimeFreqFeatures(self, timeFeatures, freqFeatures):
+		"""
+		Purpose:	Perform all frequency and time domain feature extraction on filtered data,
+					then columns the data and standardized based on mean and std
+		Passed:		Feature dictionary to perform
+		"""
+		dataList = [TIME_FEATURES[featName](self.windowIMUfiltered[:, i]) for i, direction in enumerate(DATA_COLUMNS)
+					for featName in timeFeatures] + [FREQ_FEATURES[featName](self.windowIMUPSDWelch[:, -1], self.windowIMUPSDWelch[:, i]) for i, direction in enumerate(DATA_COLUMNS) for featName in freqFeatures]
+		dataList = self.RFAllScaler.transform(np.array(dataList).reshape(1, -1))[0]
+		dataNamesTime = ['{} {} {}'.format(featName, direction, self.placement) for direction in DATA_COLUMNS for featName
+					 in timeFeatures]
+		dataNamesFreq = ['{} {} {}'.format(featName, direction, self.placement) for direction in DATA_COLUMNS for
+						 featName in freqFeatures]
+		dataNames = dataNamesTime + dataNamesFreq
+		self.EFTimeFreqColumnedFeatures = pd.DataFrame(data=[dataList], columns=dataNames)
 
 class ClIMUDataStream(threading.Timer):
 	"""
@@ -405,10 +488,11 @@ class ClIMUDataStream(threading.Timer):
 			time.sleep(waitTime - (time.perf_counter() % waitTime))
 			self.trigger.set()
 
+
 # MAIN PROGRAM
 
 if __name__=="__main__":
-	
+
 	connectedStatus = False
 	processStatus = False
 	runCompletion = False
