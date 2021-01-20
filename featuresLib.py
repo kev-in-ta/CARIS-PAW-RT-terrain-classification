@@ -21,7 +21,7 @@ def rms(array):
 def zcr(array):
     # Locations where array > 0, put -1 and 1 for rising/falling,
     # divide by total datapoints
-    return len(np.nonzero(np.diff(array > 0))[0]) / len(array)
+    return len(np.nonzero(np.diff(np.sign(array)))[0]) / len(array)
 
 '''Mean square frequency'''
 def msf(freqs, psd_amps):
