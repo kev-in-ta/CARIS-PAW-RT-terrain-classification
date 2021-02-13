@@ -23,36 +23,41 @@ def zcr(array):
     # divide by total datapoints
     return len(np.nonzero(np.diff(np.sign(array)))[0]) / len(array)
 
-'''Mean square frequency'''
+
 def msf(freqs, psd_amps):
-    num = np.sum(np.multiply(np.resize(freqs, len(psd_amps)), np.power(psd_amps, 2)))
+    '''Mean square frequency'''
+    num = np.sum(np.multiply(np.resize(np.power(freqs, 2), len(psd_amps)), psd_amps))
     denom = np.sum(psd_amps)
-    
+
     # In case zero amplitude transform is ecountered
     if denom <= EPSILON:
         return EPSILON
-    
+
     return np.divide(num, denom)
 
-'''Root mean square frequency'''
+
 def rmsf(freqs, psd_amps):
+    '''Root mean square frequency'''
     return np.sqrt(msf(freqs, psd_amps))
 
-'''Frequency center'''
+
 def fc(freqs, psd_amps):
+    '''Frequency center'''
     num = np.sum(np.multiply(np.resize(freqs, len(psd_amps)), psd_amps))
     denom = np.sum(psd_amps)
-    
-    # In case zero amplitude transform is encountered
+
+    # In case zero amplitude transform is ecountered
     if denom <= EPSILON:
         return EPSILON
-    
+
     return np.divide(num, denom)
 
-'''Variance frequency'''
-def vf(freqs, psd_amps):
-    return msf(freqs, psd_amps) - fc(freqs, psd_amps) ** 2
 
-'''Root variance frequency'''
+def vf(freqs, psd_amps):
+    '''Variance frequency'''
+    return msf(freqs - fc(freqs, psd_amps), psd_amps)
+
+
 def rvf(freqs, psd_amps):
+    '''Root variance frequency'''
     return np.sqrt(msf(freqs, psd_amps))

@@ -37,10 +37,48 @@ from featuresLib import *
 CLASS_FREQ = 0.2  # 0.2, 0.5, or 0.8
 
 # Active person
-PERSON_DATA = 'Mahsa'  # 'Keenan', 'Kevin', 'Mahsa', or 'Jamie'
+PERSON_DATA = 'Keenan'  # 'Keenan', 'Kevin', 'Mahsa', or 'Jamie'
+
+# Trajectory
+MOVE_PATTERN = 'Straight' # 'F8', 'Donut', 'Straight'
 
 # Active terrain
-TEST_TERRAIN = 'Gravel'  # 'Linoleum', 'Grass', 'Gravel'
+TEST_TERRAIN = 'Sidewalk'  # 'Linoleum', 'Grass', 'Gravel'
+
+#TERRAIN_DICT = [('Jamie', 'Concrete', 'Donut')]
+
+IMU = '6050'
+
+TERRAIN_DICT = [
+	('Jamie', 'Concrete', 'Donut'),
+	('Jamie', 'Carpet', 'Donut'),
+	('Jamie', 'Linoleum', 'F8'),
+	('Jamie', 'Asphalt','Donut'),
+	('Jamie', 'Sidewalk','Straight'),
+	('Jamie', 'Grass','Donut'),
+	('Jamie', 'Gravel', 'Donut'),
+	('Keenan', 'Concrete', 'Donut'),
+	('Keenan', 'Carpet', 'Donut'),
+	('Keenan', 'Linoleum', 'Donut'),
+	('Keenan', 'Asphalt', 'Straight'),
+	('Keenan', 'Sidewalk', 'F8'),
+	('Keenan', 'Grass', 'Straight'),
+	('Keenan', 'Gravel', 'F8'),
+	('Kevin', 'Concrete', 'Donut'),
+	('Kevin', 'Carpet', 'F8'),
+	('Kevin', 'Linoleum', 'F8'),
+	('Kevin', 'Asphalt', 'Straight'),
+	('Kevin', 'Sidewalk', 'Donut'),
+	('Kevin', 'Grass', 'Straight'),
+	('Kevin', 'Gravel', 'Straight'),
+	('Mahsa', 'Concrete', 'Straight'),
+	('Mahsa', 'Carpet', 'F8'),
+	('Mahsa', 'Linoleum', 'Donut'),
+	('Mahsa', 'Asphalt', 'F8'),
+	('Mahsa', 'Sidewalk', 'Straight'),
+	('Mahsa', 'Grass', 'F8'),
+	('Mahsa', 'Gravel', 'Straight')
+	]
 
 # Sensor list to activate
 SENSOR_LIST = ['IMU_9', 'IMU_6', 'USS_DOWN', 'USS_FORW', 'PI_CAM', 'LEFT', 'RIGHT']
@@ -54,7 +92,7 @@ DATA_COLUMNS = ['X Accel', 'Y Accel', 'Z Accel', 'X Gyro', 'Y Gyro', 'Z Gyro']
 
 EPSILON = 0.00001  # For small float values
 
-FRAME_MODULE = {'wLength': 512, 'fSamp': 300, 'fLow': 20, 'fHigh': 1}
+FRAME_MODULE = {'wLength': 1024, 'fSamp': 300, 'fLow': 20, 'fHigh': 1}
 WHEEL_MODULE = {'wLength': 333, 'fSamp': 333.3, 'fLow': 20, 'fHigh': 1}
 
 # filter parameters
@@ -75,7 +113,7 @@ TIME_FEATURES_NAMES = ['Mean', 'Std', 'Norm', 'Max', 'Min', 'RMS', 'ZCR']
 # Time domain feature functions and names           
 FREQ_FEATURES = freq_features = {'MSF': msf, 'RMSF': rmsf, 'FC': fc, 'VF': vf, 'RVF': rvf}
 
-FREQ_FEATURES_NAMES = ['MSF', 'RMSF', 'FC', 'VF', 'RVF']
+FREQ_FEATURES_NAMES = ['RMSF', 'FC', 'RVF']
 
 TIME_FREQ_FEATURES = {'Mean': np.mean, 'Std': np.std, 'Norm': l2norm, 'AC': autocorr,
 					  'Max': np.amax, 'Min': np.amin, 'RMS': rms, 'ZCR': zcr,
@@ -85,9 +123,10 @@ TIME_FREQ_FEATURES = {'Mean': np.mean, 'Std': np.std, 'Norm': l2norm, 'AC': auto
 TIME_FREQ_FEATURES_NAMES = ['Mean', 'Std', 'Norm', 'AC', 'Max', 'Min', 'RMS', 'ZCR', 'Skew', 'EK', 'MSF', 'RMSF', 'FC',
 							'VF', 'RVF']
 
-TERRAINS_OG = {'Concrete': 1, 'Carpet': 1, 'Linoleum': 1, 'Asphalt': 2, 'Sidewalk': 3, 'Grass': 4, 'Gravel': 5}
-TERRAINS = ['No Motion', 'Indoor', 'Asphalt', 'Sidewalk', 'Grass', 'Gravel']
+TERRAINS_OG = {'Concrete': 1, 'Carpet': 1, 'Linoleum': 1, 'Asphalt': 2, 'Sidewalk': 2, 'Grass': 2, 'Gravel': 2}
+TERRAINS = ['No Motion', 'Indoor', 'Outdoor']
 
+PERFORMANCE = {}
 
 # CLASSES
 
@@ -96,11 +135,13 @@ class ClTerrainClassifier:
 	Class for establishing wireless communications.
 	"""
 
-	def __init__(self, protocol='TCP'):
+	def __init__(self, testSet, protocol='TCP'):
 		"""
 		Purpose:	Initialize various sensors and class variables
 		Passed: 	Nothing
 		"""
+
+		self.testSet = testSet
 
 		# Middle
 		self.placement = 'Middle'
@@ -118,7 +159,7 @@ class ClTerrainClassifier:
 
 		self.RFTimelinePipeline = load('models/model.joblib')
 
-		self.RFResults = pd.DataFrame(columns=["True Label", "RF Time"])
+		self.RFResults = pd.DataFrame(columns=["True Label", "RF Time", "Time"])
 
 		# Prepopulate pandas dataframe
 		EFTimeColumnNames = ['{} {} {}'.format(featName, direction, self.placement) for direction in DATA_COLUMNS for
@@ -139,18 +180,21 @@ class ClTerrainClassifier:
 		self.dataQueue = Queue()
 		self.runMarker = Queue()
 
+		f_ind = np.ceil((CUT_OFF + 10) / self.sensorParam['fSamp'] * 2 * self.sensorParam['wLength']/2).astype(int)
+		f_ind2 = np.ceil((CUT_OFF + 10) / self.sensorParam['fSamp'] * 2 * 128).astype(int)
+
 		# Create class variables
 		self.windowIMUraw = np.zeros((self.sensorParam['wLength'] + 2 * PAD_LENGTH, 6))
 		self.windowIMUfiltered = np.zeros((self.sensorParam['wLength'], 6))
-		self.windowIMUFFT = np.zeros([])
-		self.windowIMUPSD = np.zeros([])
+		self.windowIMUFFT = np.zeros((f_ind,7))
+		self.windowIMUPSD = np.zeros((f_ind2,7))
 
 		# Create dictionary to house various active sensors and acivate specified sensors
 		self.instDAQLoop = {}
 
 		for sensor in ACTIVE_SENSORS:
 			if sensor == 1:
-				self.instDAQLoop[SENSOR_LIST[sensor]] = ClIMUDataStream(self.dataQueue, self.runMarker)
+				self.instDAQLoop[SENSOR_LIST[sensor]] = ClIMUDataStream(self.dataQueue, self.runMarker, self.testSet)
 
 	def fnStart(self, frequency):
 		"""
@@ -219,29 +263,31 @@ class ClTerrainClassifier:
 			# Filter window
 			self.fnFilterButter(self.windowIMUraw)
 
-			# Build PSD and PSD features
-			# self.fnBuildPSD(self.windowIMUfiltered)
-
 			# Build extracted feature vector
 			self.fnBuildTimeFeatures(TIME_FEATURES_NAMES)
 
+			# Build PSD and PSD features
+			#self.fnBuildPSD(self.windowIMUfiltered)
+
 			# Build FFT feature
-			# self.fnBuildFFT(self.windowIMUfiltered)
+			#self.fnBuildFFT(self.windowIMUfiltered)
 
 			# Build frequency features
-			# self.fnBuildFreqFeatures(FREQ_FEATURES_NAMES)
+			#self.fnBuildFreqFeatures(FREQ_FEATURES_NAMES)
 
 			terrainTypeRFTime = self.RFTimelinePipeline.predict(self.EFTimeColumnedFeatures)
+			#terrainTypeRFTime = self.RFTimelinePipeline.predict(np.append(self.EFTimeColumnedFeatures,
+			#															  self.EFFreqColumnedFeatures, axis=1))
 
 			try:
 				print('Prediction: {0:>10s}'.format(TERRAINS[terrainTypeRFTime[0]]))
-				self.RFResults = self.RFResults.append({"True Label": TERRAINS_OG[TEST_TERRAIN],
-														"RF Time": terrainTypeRFTime[0]}, ignore_index=True)
+				self.RFResults = self.RFResults.append({"True Label": TERRAINS_OG[self.testSet[1]],
+														"RF Time": terrainTypeRFTime[0], "Time": time.time()}, ignore_index=True)
 			except Exception as e:
 				print(e)
 				break
 
-			time.sleep(waitTime - (time.perf_counter() % waitTime))
+			#time.sleep(waitTime - (time.perf_counter() % waitTime))
 
 		endTime = time.time()
 
@@ -249,15 +295,17 @@ class ClTerrainClassifier:
 																					   count, (endTime - startTime)))
 		print("Terrain classifier completed.")
 
+		PERFORMANCE["{}-{}-{}-Classification".format(self.testSet[1], self.testSet[2], self.testSet[0])] = (count, endTime-startTime)
+
 		self.RFResults.to_csv(
-			os.path.join('2021-Results', "{:.0f}ms-{}-{}.csv".format(CLASS_FREQ * 1000, TEST_TERRAIN, PERSON_DATA)))
+			os.path.join('2021-Results', "{:.0f}ms-{}-{}-{}-{}.csv".format(CLASS_FREQ * 1000, IMU, self.testSet[1], self.testSet[2], self.testSet[0])))
 		print('Saved.')
 
 		self.RFResults = self.RFResults[self.RFResults["RF Time"] != 0]
 
 		y_pred = self.RFResults["RF Time"].to_numpy(dtype=np.int8)
 		print(y_pred.shape)
-		y_test = TERRAINS_OG[TEST_TERRAIN] * np.ones(len(y_pred), dtype=np.int8)
+		y_test = TERRAINS_OG[self.testSet[1]] * np.ones(len(y_pred), dtype=np.int8)
 		print(y_test.shape)
 
 		print(accuracy_score(y_test, y_pred))
@@ -291,8 +339,6 @@ class ClTerrainClassifier:
 
 		dataSet = np.copy(dataWindow)
 
-		hanningWindow = np.hanning(self.sensorParam['wLength'])
-
 		# Filter all the data columns
 		for i in range(6):
 			self.windowIMUfiltered[:, i] = signal.sosfiltfilt(sos, dataSet[:, i])[
@@ -313,19 +359,22 @@ class ClTerrainClassifier:
 		# frequency bin centers
 		xf = fft.fftfreq(N, T)[:N // 2]
 
-		window_fft = np.zeros((N / 2, 6))
+		window_fft = np.zeros((round(N / 2), 6))
+
+		hanningWindow = np.hanning(self.sensorParam['wLength'])
 
 		for i in range(6):
-			window_fft[:, i] = fft.fft(dataWindow[:, i])[0:N / 2]
-			window_fft[:, i] = 2.0 / N * abs(window_fft[:, i])  # keeping poistive freq values * 2 / window_size
+			window_fft[:, i] = fft.fft(dataWindow[:, i] * hanningWindow)[0:int(N/2)]
+			window_fft[:, i] = 2.0 / N * abs(window_fft[:, i])  # keeping positive freq values * 2 / window_size
 		# Get positive frequency bins for given FFT parameters
 
 		freq_col = np.reshape(xf, (-1, 1))
 
-		f_bool = freq_col <= CUT_OFF + 10
+		f_ind = np.ceil((CUT_OFF + 10) / self.sensorParam['fSamp'] * 2 * self.sensorParam['wLength']/2).astype(int)
+		#f_bool = freq_col <= CUT_OFF + 10
 
 		# Append the frequency column
-		self.windowIMUFFT = np.append(window_fft[f_bool, :], freq_col[f_bool], axis=1)
+		self.windowIMUFFT = np.append(window_fft[0:f_ind+1, :], freq_col[0:f_ind+1], axis=1)
 
 	def fnBuildPSD(self, dataWindow):
 		"""
@@ -339,18 +388,20 @@ class ClTerrainClassifier:
 		# sampling frequency
 		fs = self.sensorParam['fSamp']
 
-		windowIMUPSD = np.zeros((129, 6))
+		windowIMUPSD = np.zeros(((128+1), 6))
+
+		hanningWindow = np.hanning(self.sensorParam['wLength'])
 
 		# Calculate PSD for each axes
 		for i in range(6):
 			# Normalized PSD - Returns frequencies and power density
-			freq, Pxx = signal.welch(dataWindow[:, i], fs)
+			freq, Pxx = signal.welch(dataWindow[:, i] * hanningWindow, fs)
 			windowIMUPSD[:, i] = Pxx
 
-		f_bool = freq <= CUT_OFF + 10
+		f_ind = np.ceil((CUT_OFF + 10) / self.sensorParam['fSamp'] * 2 * 128).astype(int)
 
 		# Append freq column
-		self.windowIMUPSD = np.append(windowIMUPSD[f_bool, :], freq[f_bool].reshape(-1, 1), axis=1)
+		self.windowIMUPSD = np.append(windowIMUPSD[0:f_ind, :], freq[0:f_ind].reshape(-1, 1), axis=1)
 
 	def fnBuildTimeFeatures(self, features):
 		"""
@@ -400,9 +451,10 @@ class ClIMUDataStream(threading.Timer):
 	Class for establishing wireless communications.
 	"""
 
-	def __init__(self, dataQueue, runMarker):
+	def __init__(self, dataQueue, runMarker, testSet):
+		self.testSet = testSet
 		self.streamFile = pd.read_csv(
-			os.path.join(dir_path, "set_power", "Middle_{}PowerF8{}_Module6050.csv".format(TEST_TERRAIN, PERSON_DATA)))
+			os.path.join(dir_path, "set_power", "Middle_{}Power{}{}_Module{}.csv".format(testSet[1], testSet[2], testSet[0], IMU)))
 		self.streamRow = 0
 		self.streamRowEnd = len(self.streamFile.index)
 		self.dataQueue = dataQueue
@@ -455,6 +507,9 @@ class ClIMUDataStream(threading.Timer):
 		print("Sampling Frequency:       {:>8.2f} Hz. ({} Samples in {:.2f} s)".format(count / (endTime - startTime),
 																					   count, (endTime - startTime)))
 
+		PERFORMANCE["{}-{}-{}-Acquisition".format(self.testSet[1], self.testSet[2], self.testSet[0])] = (
+		count, endTime - startTime)
+
 		# Joins thread
 		timerRepeat.join()
 
@@ -473,25 +528,31 @@ class ClIMUDataStream(threading.Timer):
 
 if __name__ == "__main__":
 
-	connectedStatus = False
-	processStatus = False
-	runCompletion = False
+	for testSet in TERRAIN_DICT:
 
-	while runCompletion == False:
-		try:
-			instTerrainClassifier = ClTerrainClassifier(protocol='TCP')
-			processStatus = True
-			instTerrainClassifier.fnStart(300)
-			instTerrainClassifier.runMarker.close()
-			instTerrainClassifier.dataQueue.close()
-			print("Application Completed.")
-			runCompletion = True
-		except Exception as e:
-			time.sleep(1)
-			if processStatus:
-				instTerrainClassifier.runMarker.put(False)
-				instTerrainClassifier.fnShutDown()
+		connectedStatus = False
+		processStatus = False
+		runCompletion = False
+
+		while runCompletion == False:
+			try:
+				instTerrainClassifier = ClTerrainClassifier(testSet, protocol='TCP')
+				processStatus = True
+				instTerrainClassifier.fnStart(300)
 				instTerrainClassifier.runMarker.close()
 				instTerrainClassifier.dataQueue.close()
-				connectedStatus = False
-			print(e)
+				print("Application Completed.")
+				runCompletion = True
+			except Exception as e:
+				time.sleep(1)
+				if processStatus:
+					instTerrainClassifier.runMarker.put(False)
+					instTerrainClassifier.fnShutDown()
+					instTerrainClassifier.runMarker.close()
+					instTerrainClassifier.dataQueue.close()
+					connectedStatus = False
+				print(e)
+
+		print(PERFORMANCE)
+
+		dump(PERFORMANCE, os.path.join('2021-Results', 'performance.joblib'))
