@@ -123,8 +123,8 @@ TIME_FREQ_FEATURES = {'Mean': np.mean, 'Std': np.std, 'Norm': l2norm, 'AC': auto
 TIME_FREQ_FEATURES_NAMES = ['Mean', 'Std', 'Norm', 'AC', 'Max', 'Min', 'RMS', 'ZCR', 'Skew', 'EK', 'MSF', 'RMSF', 'FC',
 							'VF', 'RVF']
 
-TERRAINS_OG = {'Concrete': 1, 'Carpet': 1, 'Linoleum': 1, 'Asphalt': 2, 'Sidewalk': 2, 'Grass': 2, 'Gravel': 2}
-TERRAINS = ['No Motion', 'Indoor', 'Outdoor']
+TERRAINS_OG = {'Concrete': 1, 'Carpet': 1, 'Linoleum': 1, 'Asphalt': 2, 'Sidewalk': 2, 'Grass': 3, 'Gravel': 4}
+TERRAINS = ['No Motion', 'Indoor', 'Asphalt-Sidewalk', 'Grass', 'Gravel']
 
 PERFORMANCE = {}
 
@@ -267,17 +267,17 @@ class ClTerrainClassifier:
 			self.fnBuildTimeFeatures(TIME_FEATURES_NAMES)
 
 			# Build PSD and PSD features
-			#self.fnBuildPSD(self.windowIMUfiltered)
+			self.fnBuildPSD(self.windowIMUfiltered)
 
 			# Build FFT feature
-			#self.fnBuildFFT(self.windowIMUfiltered)
+			self.fnBuildFFT(self.windowIMUfiltered)
 
 			# Build frequency features
-			#self.fnBuildFreqFeatures(FREQ_FEATURES_NAMES)
+			self.fnBuildFreqFeatures(FREQ_FEATURES_NAMES)
 
-			terrainTypeRFTime = self.RFTimelinePipeline.predict(self.EFTimeColumnedFeatures)
-			#terrainTypeRFTime = self.RFTimelinePipeline.predict(np.append(self.EFTimeColumnedFeatures,
-			#															  self.EFFreqColumnedFeatures, axis=1))
+			#terrainTypeRFTime = self.RFTimelinePipeline.predict(self.EFTimeColumnedFeatures)
+			terrainTypeRFTime = self.RFTimelinePipeline.predict(np.append(self.EFTimeColumnedFeatures,
+																		  self.EFFreqColumnedFeatures, axis=1))
 
 			try:
 				print('Prediction: {0:>10s}'.format(TERRAINS[terrainTypeRFTime[0]]))
