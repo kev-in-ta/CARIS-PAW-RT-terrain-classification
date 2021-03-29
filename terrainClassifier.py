@@ -13,12 +13,10 @@ import sys
 import threading
 
 import numpy as np
-from sklearn.metrics import accuracy_score, balanced_accuracy_score, f1_score, precision_score, recall_score
-from scipy import signal, stats, fft
+from sklearn.metrics import accuracy_score, balanced_accuracy_score
+from scipy import signal, fft
 
 import pandas as pd
-import sklearn
-import mlxtend
 from joblib import load, dump
 
 from multiprocessing import Process, Queue
@@ -33,21 +31,14 @@ from featuresLib import *
 
 # DEFINITIONS
 
-# Classification frequency
-CLASS_FREQ = 0.2  # 0.2, 0.5, or 0.8
-
-# Active person
-PERSON_DATA = 'Keenan'  # 'Keenan', 'Kevin', 'Mahsa', or 'Jamie'
-
-# Trajectory
-MOVE_PATTERN = 'Straight' # 'F8', 'Donut', 'Straight'
-
-# Active terrain
-TEST_TERRAIN = 'Sidewalk'  # 'Linoleum', 'Grass', 'Gravel'
-
-#TERRAIN_DICT = [('Jamie', 'Concrete', 'Donut')]
+# classification time delay # NOTE: Currently unused TODO: change name or value for consistency
+CLASS_FREQ = 0.2
 
 IMU = '6050'
+
+# specify files to read
+
+#TERRAIN_DICT = [('Jamie', 'Concrete', 'Donut')]
 
 TERRAIN_DICT = [
 	('Jamie', 'Concrete', 'Donut'),
@@ -266,18 +257,16 @@ class ClTerrainClassifier:
 			# Build extracted feature vector
 			self.fnBuildTimeFeatures(TIME_FEATURES_NAMES)
 
-			# Build PSD and PSD features
-			self.fnBuildPSD(self.windowIMUfiltered)
+			## Build PSD and PSD features
+			#self.fnBuildPSD(self.windowIMUfiltered)
+			## Build FFT feature
+			#self.fnBuildFFT(self.windowIMUfiltered)
+			## Build frequency features
+			#self.fnBuildFreqFeatures(FREQ_FEATURES_NAMES)
 
-			# Build FFT feature
-			self.fnBuildFFT(self.windowIMUfiltered)
-
-			# Build frequency features
-			self.fnBuildFreqFeatures(FREQ_FEATURES_NAMES)
-
-			#terrainTypeRFTime = self.RFTimelinePipeline.predict(self.EFTimeColumnedFeatures)
-			terrainTypeRFTime = self.RFTimelinePipeline.predict(np.append(self.EFTimeColumnedFeatures,
-																		  self.EFFreqColumnedFeatures, axis=1))
+			terrainTypeRFTime = self.RFTimelinePipeline.predict(self.EFTimeColumnedFeatures)
+			#terrainTypeRFTime = self.RFTimelinePipeline.predict(np.append(self.EFTimeColumnedFeatures,
+			#															  self.EFFreqColumnedFeatures, axis=1))
 
 			try:
 				print('Prediction: {0:>10s}'.format(TERRAINS[terrainTypeRFTime[0]]))
